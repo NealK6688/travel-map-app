@@ -1,0 +1,17 @@
+# 运行时数据(照片/store.json 含私人 GPS 与图片,绝不入库)
+/data/
+target/
+# 开发过程产物:截图 harness、review 底稿、参考件、工作流脚本
+/_shots/
+/_node_reference/
+/_review/
+/_wf_*.js
+# 历次上线的手工备份
+*.bak
+*.bak.*
+# 杂项
+/doubao-登录二维码.png
+/mk_final.png
+/ui_variant_*.html
+/--clip
+/--selector

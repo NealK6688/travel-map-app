@@ -1,0 +1,27 @@
+[package]
+name = "travel-map-app"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "travel-map-app"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.7", features = ["multipart"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "cors", "compression-gzip"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+kamadak-exif = "0.5"
+image = "0.25"
+anyhow = "1"
+sha2 = "0.10"
+rand = "0.8"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[profile.release]
+opt-level = 2
+strip = true
