@@ -325,14 +325,14 @@ fn load_store() -> Store {
         Ok(t) => match serde_json::from_str::<Store>(&t) {
             Ok(s) => s,
             Err(e) => {
-                // 解析失败绝不能静默当空库——那会让磁盘上完好的元数据在应用里"消失"，
-                // 且随后任意写操作会用空库覆盖掉原文件。先把损坏文件另存留证，再退空库启动。
+                // 解析失败绝不能当空库——否则随后任意写操作会用空库覆盖掉原文件（真实数据永久丢失）。
+                // 先把损坏文件另存留证，然后拒绝启动，交人工介入，绝不空库覆盖。
                 let bak = data_dir().join(format!("store.corrupt.{}.json", now_secs()));
                 let _ = fs::copy(store_file(), &bak);
                 eprintln!(
-                    "[FATAL] store.json 解析失败：{e}；已备份损坏文件到 {bak:?}，以空库启动。请人工检查后恢复！"
+                    "[FATAL] store.json 解析失败：{e}；已备份损坏文件到 {bak:?}。为避免用空库覆盖真实数据，拒绝启动，请人工检查后恢复。"
                 );
-                Store::default()
+                std::process::exit(1);
             }
         },
         // 只有“文件不存在”才是全新部署、空库正常。
@@ -1245,7 +1245,7 @@ async fn like_place(
         if g.contains(&key) {
             true
         } else {
-            g.insert(key);
+            g.insert(key.clone());
             if g.len() > 200_000 {
                 g.clear();
             }
@@ -1264,7 +1264,11 @@ async fn like_place(
     let n = store.likes.entry(id.clone()).or_insert(0);
     *n += 1;
     let cnt = *n;
-    if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
+    if let Err(e) = save_store(&store) {
+        rollback_from_disk(&mut store);
+        st.like_guard.lock().unwrap().remove(&key); // 存盘失败：撤销去重记录，否则用户重试会被当成“已点过”
+        return save_err(e);
+    }
     Json(json!({"ok": true, "likes": cnt})).into_response()
 }
 
@@ -2081,13 +2085,12 @@ async fn import_zip(
         }
     };
     let photo_count = photos.iter().filter(|(rel, _)| !rel.starts_with("thumb/")).count();
-    // 原子性：先把旧库落备份、把所有照片写盘并逐一校验——任一步失败就中止，
-    // 绝不在照片没写全的情况下替换 store 或清理旧照片（否则会出现“新照片没写进去、旧照片被删、接口却返回成功”的数据丢失）。
+    // 真·原子性：照片先写到 {目标}.importtmp 暂存文件（绝不直接覆盖正式照片，原图不会被截断），
+    // 全部写成功后再逐个 rename 就位（同目录 rename 近乎原子）。任一暂存写失败：删掉所有暂存文件、中止、原图/原库分毫不动。
     if let Err(e) = fs::copy(
         store_file(),
         data_dir().join(format!("store.pre-import.{}.bak.json", now_secs())),
     ) {
-        // 首次导入时旧库可能不存在（NotFound 可忽略）；其他错误（磁盘/权限）视为不安全，中止
         if e.kind() != std::io::ErrorKind::NotFound {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("备份旧数据失败，导入已中止（原数据未改动）：{e}")}))).into_response();
         }
@@ -2095,18 +2098,38 @@ async fn import_zip(
     if let Err(e) = fs::create_dir_all(thumb_dir()) {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("创建照片目录失败，导入已中止：{e}")}))).into_response();
     }
+    // 阶段一：全部写到暂存文件
+    let mut staged: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new(); // (暂存, 正式)
+    let mut stage_err: Option<String> = None;
     for (rel, data) in &photos {
         let path = photo_dir().join(rel);
         if let Some(parent) = path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("创建照片子目录失败，导入已中止（原数据未改动）：{e}")}))).into_response();
+                stage_err = Some(format!("创建照片子目录失败：{e}"));
+                break;
             }
         }
-        if let Err(e) = fs::write(&path, data) {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("照片写盘失败，导入已中止（原数据未改动）：{e}")}))).into_response();
+        let tmp = std::path::PathBuf::from(format!("{}.importtmp", path.display()));
+        if let Err(e) = fs::write(&tmp, data) {
+            stage_err = Some(format!("照片写盘失败：{e}"));
+            break;
+        }
+        staged.push((tmp, path));
+    }
+    if let Some(msg) = stage_err {
+        for (tmp, _) in &staged {
+            let _ = fs::remove_file(tmp); // 回滚：清掉已写的暂存文件，正式照片与库完全没动
+        }
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{msg}，导入已中止（原数据未改动）")}))).into_response();
+    }
+    // 阶段二：暂存文件逐个就位（同目录 rename，原子替换同名旧照片，无截断窗口）
+    for (tmp, path) in &staged {
+        if let Err(e) = fs::rename(tmp, path) {
+            let _ = fs::remove_file(tmp);
+            eprintln!("[warn] 照片就位 rename 失败：{e}（已就位的照片保留，旧库未替换，无数据丢失）");
         }
     }
-    // 照片全部落盘成功，才替换 store 并清理孤儿照片
+    // 照片全部就位，才替换 store 并清理孤儿照片
     let place_count;
     {
         let mut store = st.store.lock().await;
@@ -2533,10 +2556,13 @@ async fn upload(
             date: date.clone(),
         };
 
-        // 带 place_id：直接追加到指定 place，跳过就近并点
+        // 带 place_id：直接追加到指定 place，跳过就近并点。
+        // 副本上改动 → 存副本成功 → 才替换内存（存盘失败则删掉刚写的照片、报错、不留幽灵元数据）。
         if let Some(pid) = &target_place_id {
             let mut store = st.store.lock().await;
-            if let Some(p) = store.places.iter_mut().find(|p| &p.id == pid) {
+            if let Some(idx) = store.places.iter().position(|p| &p.id == pid) {
+                let mut next = store.clone();
+                let p = &mut next.places[idx];
                 p.photos.push(photo.clone());
                 if p.date.is_none() {
                     p.date = date.clone();
@@ -2545,7 +2571,13 @@ async fn upload(
                     p.color = color.clone();
                 }
                 let place_clone = p.clone();
-                if let Err(e) = save_store(&store) { eprintln!("[warn] save_store 失败: {e}"); }  // 增量落盘，尽力而为
+                if let Err(e) = save_store(&next) {
+                    drop(store);
+                    delete_photo_files(&id); // 删掉刚写盘的孤儿照片
+                    results.push(json!({"error": format!("保存失败：{e}"), "name": file_name}));
+                    continue;
+                }
+                *store = next;
                 results.push(json!({"photo": photo, "place": place_clone}));
                 continue;
             }
@@ -2555,17 +2587,23 @@ async fn upload(
         let (lat, lng) = match gps {
             Some(v) => v,
             None => {
-                // 读不到 GPS：照片已压缩存盘，进 unplaced 暂存区等待手动归位
-                {
-                    let mut store = st.store.lock().await;
-                    store.unplaced.push(UnplacedPhoto {
-                        id: id.clone(),
-                        url: photo.url.clone(),
-                        thumb: photo.thumb.clone(),
-                        name: file_name.clone(),
-                    });
-                    if let Err(e) = save_store(&store) { eprintln!("[warn] save_store 失败: {e}"); }  // 增量落盘，尽力而为
+                // 读不到 GPS：照片已压缩存盘，进 unplaced 暂存区等待手动归位。
+                // 同样副本→存→换；存盘失败删孤儿照片并报错，不留幽灵 unplaced 元数据。
+                let mut store = st.store.lock().await;
+                let mut next = store.clone();
+                next.unplaced.push(UnplacedPhoto {
+                    id: id.clone(),
+                    url: photo.url.clone(),
+                    thumb: photo.thumb.clone(),
+                    name: file_name.clone(),
+                });
+                if let Err(e) = save_store(&next) {
+                    drop(store);
+                    delete_photo_files(&id);
+                    results.push(json!({"error": format!("保存失败：{e}"), "name": file_name}));
+                    continue;
                 }
+                *store = next;
                 results.push(json!({"photo": photo, "needLocation": true, "unplacedId": id}));
                 continue;
             }
@@ -2646,7 +2684,12 @@ async fn upload(
                 pid
             };
             // 增量落盘：每张处理完即 save，进程中途崩溃不会丢已入库的照片索引（防孤儿）
-            if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
+            if let Err(e) = save_store(&store) {
+                rollback_from_disk(&mut store);
+                drop(store);
+                delete_photo_files(&id); // 删掉刚写盘的孤儿照片
+                return save_err(e);
+            }
             store.places.iter().find(|p| p.id == pid).cloned()
         };
         results.push(json!({"photo": photo, "place": place_clone}));
