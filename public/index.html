@@ -4312,22 +4312,23 @@ closeLightbox=function(){_closeLightbox();if(!(mqMobile.matches&&drawerState==='
 lbClose.onclick=closeLightbox;
 
 if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
-// 后台预装全球低层级底图（0-5 级，约 13MB，一次装好永久秒开/离线）——通过 SW cache-first 落入本地缓存
+// 后台预装全球低层级底图（0-3 级，约 85 块 ~1MB，一次装好世界视图秒开/可离线）——通过 SW cache-first 落入本地缓存。
+// 只装到 3 级：覆盖"缩到世界/大洲"足矣；4-5 级共 1280 块 ~12MB 访客几乎用不到，不该在首访默默替人下。
 async function prewarmBaseMap(){
   try{
-    if(localStorage.getItem('basemapPrewarmed')==='v2')return;
-    // 从 style.json 取当前底图的瓦片模板（栅格/carto 或矢量/ofm 都通用），预装全球 0-5 级
+    if(localStorage.getItem('basemapPrewarmed')==='v3')return;
+    // 从 style.json 取当前底图的瓦片模板（栅格/carto 或矢量/ofm 都通用），预装全球 0-3 级
     let tmpl='';
     try{const st=await (await fetch('/tiles/style.json',{cache:'no-cache'})).json();
       for(const k in (st.sources||{})){const s=st.sources[k];if(s&&s.tiles&&s.tiles[0]){tmpl=s.tiles[0];break;}}}catch(e){}
     if(!tmpl)return;
     const urls=[];
-    for(let z=0;z<=5;z++){const n=1<<z;for(let x=0;x<n;x++)for(let y=0;y<n;y++)
+    for(let z=0;z<=3;z++){const n=1<<z;for(let x=0;x<n;x++)for(let y=0;y<n;y++)
       urls.push(tmpl.replace('{z}',z).replace('{x}',x).replace('{y}',y));}
     let i=0,ok=0; const CONC=6;
     async function worker(){ while(i<urls.length){ const u=urls[i++]; try{ const r=await fetch(u,{cache:'force-cache'}); if(r.ok)ok++; }catch(e){} } }
     await Promise.all(Array.from({length:CONC},worker));
-    if(ok>urls.length*0.9)localStorage.setItem('basemapPrewarmed','v2'); // 九成以上成功才标记完成，否则下次继续补
+    if(ok>urls.length*0.9)localStorage.setItem('basemapPrewarmed','v3'); // 九成以上成功才标记完成，否则下次继续补
   }catch(e){}
 }
 // 桌面操作提示 30 秒就懂：只在首访展示 7 秒后淡出，localStorage 记一次，不再常驻整个生命周期
