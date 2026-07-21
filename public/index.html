@@ -125,6 +125,50 @@ button,.tab,.ntab,.tchip,.ychip,.it,.trchip,.trcard{touch-action:manipulation;}
 @media(min-width:721px){.heroentry{left:112px;transform:none;bottom:26px;}
   .heroentry:hover{transform:translateY(-2px);}}
 body.owner .heroentry{display:none !important;}
+  /* ========== 🧭 访客首页(tour 模式):地图为主 + 顶部旅程切换 + 底部横向 step 时间线 ========== */
+  .tourui{position:absolute;inset:0;z-index:8;pointer-events:none;display:none;}
+  body.tourmode .tourui{display:block;}
+  body.tourmode .header,body.tourmode .nav,body.tourmode .tipbar,body.tourmode .heroentry,body.tourmode .cklcard,body.tourmode .blrow,body.tourmode .fabhome{display:none !important;}
+  /* 顶部旅程切换 */
+  .tourswitch{position:absolute;top:calc(16px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:4px;background:var(--panel);border:1px solid var(--card3);border-radius:999px;padding:5px;box-shadow:0 8px 26px rgba(60,45,35,.2);pointer-events:auto;max-width:calc(100vw - 32px);overflow-x:auto;scrollbar-width:none;}
+  .tourswitch::-webkit-scrollbar{display:none;}
+  .tourswitch .ts{display:flex;align-items:center;gap:7px;padding:8px 15px;border-radius:999px;font-size:13px;font-weight:700;color:var(--faint);cursor:pointer;white-space:nowrap;flex:none;transition:background .15s,color .15s;}
+  .tourswitch .ts.on{background:var(--brand);color:#fff;}
+  .tourswitch .ts.all{color:var(--brand);}
+  .tourswitch .ts .tdot{width:8px;height:8px;border-radius:50%;flex:none;}
+  /* 当前站信息卡 */
+  .tourinfo{position:absolute;left:100px;top:82px;width:330px;background:var(--panel);border:1px solid var(--card3);border-radius:18px;box-shadow:0 16px 42px rgba(50,40,28,.24);overflow:hidden;pointer-events:auto;opacity:0;transform:translateY(-8px);transition:opacity .25s,transform .25s;}
+  .tourinfo.show{opacity:1;transform:none;}
+  @media(max-width:720px){.tourinfo{display:none;}} /* 手机端信息并进时间线卡,不占屏 */
+  .tourinfo .ph{height:170px;background-size:cover;background-position:center;position:relative;cursor:pointer;}
+  .tourinfo .ph.noph{display:flex;align-items:center;justify-content:center;font-size:48px;}
+  .tourinfo .ph .idx{position:absolute;left:12px;top:12px;background:rgba(40,34,24,.6);color:#fff;font-size:11px;font-weight:800;border-radius:999px;padding:4px 11px;letter-spacing:.5px;}
+  .tourinfo .ph .zoom{position:absolute;right:11px;bottom:10px;background:rgba(40,34,24,.55);color:#fff;font-size:10.5px;font-weight:700;border-radius:999px;padding:4px 10px;}
+  .tourinfo .bd{padding:12px 16px 15px;}
+  .tourinfo .eb{font-size:11px;font-weight:800;letter-spacing:1px;color:var(--goldHi,#A9822F);display:flex;align-items:center;gap:6px;}
+  .tourinfo .eb .cd{width:8px;height:8px;border-radius:50%;flex:none;}
+  .tourinfo h3{font-family:var(--serif);font-size:19px;color:var(--text);margin-top:4px;}
+  .tourinfo .loc{font-size:12px;color:var(--faint);font-weight:600;margin-top:3px;}
+  .tourinfo p{font-size:12.5px;line-height:1.7;color:#564C3C;margin-top:9px;max-height:96px;overflow:auto;}
+  .tourinfo .rd{margin-top:11px;width:100%;background:var(--brand);color:#fff;border:none;border-radius:14px;padding:11px 0;font-size:13px;font-weight:800;letter-spacing:1px;cursor:pointer;box-shadow:0 8px 18px rgba(49,86,70,.32);}
+  /* 底部横向 step 时间线 */
+  .tourtl{position:absolute;left:0;right:0;bottom:0;padding:24px 0 calc(16px + var(--safeB));background:linear-gradient(rgba(58,50,38,0),rgba(58,50,38,.16));pointer-events:auto;}
+  @media(max-width:720px){.tourtl{bottom:calc(64px + var(--safeB));}} /* 让开底部 tabbar */
+  .tourtl .hd{position:absolute;left:24px;top:2px;font-size:11px;font-weight:800;letter-spacing:1.5px;color:#fff;text-shadow:0 1px 6px rgba(0,0,0,.5);}
+  .tourtl .row{display:flex;gap:12px;padding:0 24px;overflow-x:auto;align-items:flex-end;scrollbar-width:none;}
+  .tourtl .row::-webkit-scrollbar{display:none;}
+  .tstep{flex:none;width:142px;background:var(--panel);border:1px solid var(--card3);border-radius:14px;overflow:hidden;box-shadow:0 10px 26px rgba(50,40,28,.28);cursor:pointer;transition:transform .16s,box-shadow .16s,outline-color .16s;outline:3px solid transparent;}
+  .tstep.on{outline-color:var(--coral);transform:translateY(-8px);box-shadow:0 18px 38px rgba(224,104,79,.38);}
+  .tstep .c{height:84px;background-size:cover;background-position:center;position:relative;background-color:#e7ddc9;}
+  .tstep .c.plan{filter:grayscale(.35) brightness(1.04);}
+  .tstep .c .n{position:absolute;left:7px;top:7px;min-width:20px;height:20px;padding:0 5px;border-radius:10px;background:var(--coral);color:#fff;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,.3);}
+  .tstep .c.plan .n{background:#8fa9bd;}
+  .tstep .c .em{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:30px;}
+  .tstep .m{padding:8px 10px 9px;}
+  .tstep .m .nm{font-size:12.5px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .tstep .m .dt{font-size:10.5px;color:var(--faint);font-weight:600;margin-top:2px;}
+  .tstep .m .dt .day{color:var(--brand);font-weight:800;}
+  .tourtl .lk{flex:none;align-self:center;width:14px;height:2px;background:rgba(255,255,255,.7);margin-bottom:34px;border-radius:2px;}
   .nav .list{background:var(--panel);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--card3);border-radius:var(--rBox);box-shadow:var(--shadow);padding:7px;max-height:52vh;overflow:auto;
     -webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 14px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 14px),transparent);}
   .nav .grp{display:flex;align-items:center;gap:7px;padding:8px 9px 4px;font-size:10.5px;font-weight:800;letter-spacing:.8px;color:var(--faint);}
@@ -1392,6 +1436,13 @@ body.owner .heroentry{display:none !important;}
 <!-- 访客主入口：从最精彩的一趟旅程开始翻阅（站主登录后不显示） -->
 <button class="heroentry" id="heroEntry" style="display:none" aria-label="开始翻阅旅程"></button>
 
+<!-- 🧭 访客首页(tour 模式)覆盖层 -->
+<div class="tourui" id="tourUI">
+  <div class="tourswitch" id="tourSwitch"></div>
+  <div class="tourinfo" id="tourInfo"></div>
+  <div class="tourtl" id="tourTL"><div class="hd" id="tourTLHd"></div><div class="row" id="tourTLRow"></div></div>
+</div>
+
 <!-- 移动端底部 Tab 栏 -->
 <nav class="tabbar" id="tabbar">
   <button class="tab active" data-tab="map"><span class="ti"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4 3 6.5v13L9 17l6 2.5 6-2.5v-13L15 6.5 9 4Z"/><path d="M9 4v13M15 6.5v13"/></svg></span><span class="tl">地图</span></button>
@@ -1614,6 +1665,11 @@ async function refresh(flyToId){
   // 徽章解锁检测：与上次刷新对比，新增的解锁项弹庆祝（首次建立基线不弹）
   detectBadgeUnlock();
   clearMarkers(); buildMarkers(); updateClusters(); updateRoute();
+  // tour 首页开着时:数据变了就同步刷新切换条/时间线/路线（若这趟被删则退出）
+  if(TOUR){
+    if(!tripById(TOUR.trip.id)||!PLACES.some(p=>p.tripId===TOUR.trip.id)){closeTour();}
+    else{renderTourSwitch();renderTourTimeline();tourRouteDraw();tourSelect(Math.min(TOUR.idx,TOUR.stops.length-1),false);}
+  }
   if(typeof renderCklCard==='function')renderCklCard();
   // 数据变更后同步刷新打开中的搜索结果，避免残留已删地点
   if(typeof renderTripsSheet==='function'){const ss=document.getElementById('searchSheet');if(ss&&ss.classList.contains('show'))renderTripsSheet();}
@@ -2873,6 +2929,7 @@ const keyBtn=document.getElementById('keyBtn'),loginCard=document.getElementById
       pwInput=document.getElementById('pwInput'),loginErr=document.getElementById('loginErr');
 function applyOwner(){
   document.body.classList.toggle('owner',OWNER);
+  if(OWNER&&TOUR&&typeof closeTour==='function')closeTour(); // 站主登录：退出访客首页，回到管理式地图
   // 「我」对访客有歧义（这不是访客的账户），访客态显示「关于」
   document.querySelectorAll('.tab[data-tab="me"] .tl,.ntab[data-rail="me"] .rlb').forEach(el=>el.textContent=OWNER?'我':'关于');
   keyBtn.textContent=OWNER?'👤':'🔑';
@@ -4148,6 +4205,139 @@ document.addEventListener('keydown',e=>{
   else if(e.key==='ArrowLeft'){e.preventDefault();readerNav(-1);}
   else if(e.key==='Escape'){closeReader();}
 });
+
+/* ========== 🧭 访客首页(tour 模式):地图为主 + 顶部旅程切换 + 底部横向 step 时间线 ========== */
+let TOUR=null; // {trip, stops, idx, dayOf, datedPts}
+function tourRouteEnsure(){
+  if(!map)return false;
+  try{
+    if(!map.getSource('tour-route')){
+      map.addSource('tour-route',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+      map.addLayer({id:'tour-casing',type:'line',source:'tour-route',layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#ffffff','line-width':8,'line-opacity':.55}});
+      map.addLayer({id:'tour-trail',type:'line',source:'tour-route',layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#E0684F','line-width':4,'line-opacity':.9,'line-dasharray':[.3,2.4]}});
+    }
+    return true;
+  }catch(_){return false;}
+}
+function tourRouteDraw(){
+  if(!TOUR||!tourRouteEnsure())return;
+  const pts=TOUR.datedPts||[];
+  const feats=pts.length>=2?[{type:'Feature',properties:{},geometry:{type:'LineString',coordinates:pts.map(p=>[p.lng,p.lat])}}]:[];
+  try{map.getSource('tour-route').setData({type:'FeatureCollection',features:feats});}catch(_){}
+}
+function tourRouteClear(){
+  if(!map)return;
+  try{if(map.getSource('tour-route'))map.getSource('tour-route').setData({type:'FeatureCollection',features:[]});}catch(_){}
+}
+function tourPad(){
+  if(mqMobile.matches)return {top:150,bottom:Math.min(Math.round(innerHeight*.34),300),left:30,right:30};
+  return {top:150,bottom:190,left:Math.min(400,Math.round(innerWidth*.30)),right:80};
+}
+function tourFlyStop(p){
+  if(!map||!p)return;
+  try{map.flyTo({center:[p.lng,p.lat],zoom:12.5,padding:tourPad(),duration:1600,curve:1.5,essential:true});}catch(_){}
+}
+function tourFitAll(){
+  if(!map||!TOUR)return;
+  const pts=(TOUR.datedPts&&TOUR.datedPts.length?TOUR.datedPts:TOUR.stops);
+  if(!pts.length)return;
+  try{const b=new maplibregl.LngLatBounds();pts.forEach(p=>b.extend([p.lng,p.lat]));map.fitBounds(b,{padding:tourPad(),duration:1400,maxZoom:12,essential:true});}catch(_){}
+}
+function renderTourSwitch(){
+  const box=document.getElementById('tourSwitch');if(!box)return;box.innerHTML='';
+  const trips=TRIPS.filter(t=>PLACES.some(p=>p.tripId===t.id&&p.status!=='planned'));
+  trips.forEach(t=>{
+    const on=TOUR&&TOUR.trip.id===t.id;
+    const b=document.createElement('div');b.className='ts'+(on?' on':'');
+    b.innerHTML='<span class="tdot" style="background:'+(on?'#fff':esc(t.color||'#E0684F'))+'"></span>'+esc((t.em?t.em+' ':'')+t.name);
+    b.onclick=()=>{if(!on)openTour(t.id);};
+    box.appendChild(b);
+  });
+  const all=document.createElement('div');all.className='ts all';all.textContent='🌏 全部足迹';
+  all.onclick=()=>closeTour();
+  box.appendChild(all);
+}
+function renderTourInfo(i){
+  const box=document.getElementById('tourInfo');if(!box||!TOUR)return;
+  const p=TOUR.stops[i];if(!p){box.classList.remove('show');return;}
+  const bg=fullPhoto(p),note=stopNote(p),dd=dispDate(p.date),dn=TOUR.dayOf[p.id];
+  const col=(p.status!=='planned'&&p.color)?p.color:(TOUR.trip.color||'#E0684F');
+  const loc=[p.city,p.country].filter(Boolean).join(' · ');
+  const N=TOUR.stops.length;
+  box.innerHTML=(bg
+      ?'<div class="ph" data-act="zoom" style="background-image:url(\''+bg.replace(/[\'"\\]/g,'')+'\')"><span class="idx">第 '+(i+1)+' 站 / 共 '+N+' 站</span><span class="zoom">🔍 点开看大图</span></div>'
+      :'<div class="ph noph" style="background:linear-gradient(135deg,'+esc(col)+',#2a4033)"><span class="idx">第 '+(i+1)+' 站 / 共 '+N+' 站</span>'+esc(placeEmoji(p))+'</div>')
+    +'<div class="bd"><div class="eb"><span class="cd" style="background:'+esc(col)+'"></span>'+(dn?'DAY '+dn:'')+(dd?(dn?' · ':'')+esc(dd):'')+'</div>'
+    +'<h3>'+esc(p.name||p.short||'某一处')+'</h3>'+(loc?'<div class="loc">📍 '+esc(loc)+'</div>':'')
+    +(note?'<p>'+esc(note).replace(/\n/g,'<br>')+'</p>':'')
+    +'<button class="rd" data-act="read">📖 跟着走一遍</button></div>';
+  box.classList.add('show');
+  box.querySelector('[data-act=read]').onclick=()=>{const t=TOUR.trip.id;closeTour();openReader(t);};
+  const z=box.querySelector('[data-act=zoom]');if(z)z.onclick=()=>{if(p.photos&&p.photos.length)openLightbox(p.photos,0);};
+}
+function renderTourTimeline(){
+  const row=document.getElementById('tourTLRow'),hd=document.getElementById('tourTLHd');if(!row||!TOUR)return;
+  hd.textContent='🚶 跟着走一遍 · '+TOUR.stops.length+' 站';
+  row.innerHTML='';
+  TOUR.stops.forEach((p,i)=>{
+    if(i>0){const lk=document.createElement('div');lk.className='lk';row.appendChild(lk);}
+    const cv=coverThumb(p),dd=dispDate(p.date),dn=TOUR.dayOf[p.id];
+    const card=document.createElement('div');card.className='tstep'+(i===TOUR.idx?' on':'');card.dataset.i=i;
+    const cover=cv?'<div class="c'+(p.status==='planned'?' plan':'')+'" style="background-image:url(\''+cv.replace(/[\'"\\]/g,'')+'\')"><span class="n">'+(i+1)+'</span></div>'
+      :'<div class="c'+(p.status==='planned'?' plan':'')+'"><span class="n">'+(i+1)+'</span><span class="em">'+esc(placeEmoji(p))+'</span></div>';
+    card.innerHTML=cover+'<div class="m"><div class="nm">'+esc(p.name||p.short||'某一处')+'</div>'
+      +'<div class="dt">'+(dn?'<span class="day">Day '+dn+'</span>':'')+(dd?(dn?' · ':'')+esc(dd):(p.status==='planned'?'想去':''))+'</div></div>';
+    card.onclick=()=>tourSelect(i);
+    row.appendChild(card);
+  });
+}
+function tourSelect(i,fly){
+  if(!TOUR)return;
+  TOUR.idx=Math.max(0,Math.min(i,TOUR.stops.length-1));
+  document.querySelectorAll('#tourTLRow .tstep').forEach(c=>c.classList.toggle('on',+c.dataset.i===TOUR.idx));
+  const on=document.querySelector('#tourTLRow .tstep.on');if(on)on.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
+  const p=TOUR.stops[TOUR.idx];
+  renderTourInfo(TOUR.idx);
+  storyHalo(p);
+  if(fly!==false)tourFlyStop(p);
+}
+function openTour(tripId){
+  const trip=tripById(tripId);if(!trip)return;
+  let members=PLACES.filter(p=>p.tripId===trip.id);
+  members.sort((a,b)=>{const da=parseDate(a.date),db=parseDate(b.date);if(da&&db)return da-db;if(da)return -1;if(db)return 1;return 0;});
+  if(!members.length){toast('这趟还没有地点',2000);return;}
+  const dayOf={};let dn=0;
+  groupByDay(members).forEach(g=>{if(g.date){dn++;g.stops.forEach(s=>dayOf[s.id]=dn);}});
+  TOUR={trip,stops:members,idx:0,dayOf,datedPts:tripDatedPts(trip)};
+  // 收起可能开着的浮层
+  if(REPLAY.on)stopReplay(false);closePanel();closeSummary();meCard.classList.remove('show');searchSheet.classList.remove('show');togglePlusMenu(false);
+  document.body.classList.add('tourmode');
+  // 只显示这趟的标记
+  TRIP_FILTER=trip.id;YEAR_FILTER=null;CAT_FILTER=null;
+  clearMarkers();buildMarkers();updateClusters();
+  tourRouteEnsure();tourRouteDraw();
+  renderTourSwitch();renderTourTimeline();
+  tourSelect(0,false);
+  tourFitAll();
+  try{history.replaceState(null,'','#tour/'+encodeURIComponent(trip.id));}catch(_){}
+}
+function closeTour(){
+  if(!TOUR)return;
+  TOUR=null;
+  document.body.classList.remove('tourmode');
+  tourRouteClear();storyHalo(null);
+  TRIP_FILTER=null;
+  clearMarkers();buildMarkers();updateClusters();updateRoute();
+  try{history.replaceState(null,'',location.pathname);}catch(_){}
+  fitAll(true);
+}
+// 未登录访客默认落到 tour 首页(有可讲的旅程时)
+function maybeAutoTour(){
+  if(OWNER||TOUR)return;
+  const best=bestStoryTrip();
+  if(best)openTour(best.t.id);
+}
+
 function openSearchSheet(){
   if(REPLAY.on)stopReplay(false);
   closePanel();togglePlusMenu(false);closeSummary();meCard.classList.remove('show');
@@ -4564,6 +4754,11 @@ document.getElementById('batchDel').onclick=batchDelete;
   }
   const ht=location.hash.match(/^#t\/(.+)$/);
   if(ht){const tid=decodeURIComponent(ht[1]);if(tripById(tid))setTimeout(()=>{openSearchSheet();renderTripDetail(tid);},600);}
+  // 访客首页(tour):#tour/<id> 深链直达某趟;无分享 hash 且未登录 → 自动落到最值得看的一趟
+  const htour=location.hash.match(/^#tour\/(.+)$/);
+  const startTour=(tid)=>{ const run=()=>{ if(tid&&tripById(tid))openTour(tid); else if(!tid)maybeAutoTour(); }; if(map)map.once('idle',run); else run(); };
+  if(htour)startTour(decodeURIComponent(htour[1]));
+  else if(!hm&&!ht&&!OWNER)startTour(null);
   if(map){
     // 地图首帧渲染后再启动预装，不抢首屏带宽
     map.on('idle',()=>{ if(!window._pwStarted){window._pwStarted=1; setTimeout(prewarmBaseMap,1500);} });
