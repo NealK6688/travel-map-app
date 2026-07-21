@@ -14,6 +14,7 @@ use std::{
     fs,
     io::Cursor,
     path::{Path as FsPath, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     sync::Arc,
     time::Duration,
 };
@@ -31,6 +32,54 @@ fn data_dir() -> PathBuf {
 }
 fn cache_dir() -> PathBuf {
     data_dir().join("tilecache")
+}
+// 瓦片磁盘缓存上限（默认 2GB，TILE_CACHE_MAX_MB 可覆盖）。瓦片代理无鉴权，
+// 匿名请求成功即落盘，无上限则可被刷爆磁盘。每积累若干次写触发一次修剪，按 mtime 删最旧到降回上限。
+static TILE_WRITE_COUNT: AtomicU64 = AtomicU64::new(0);
+fn tile_cache_cap_bytes() -> u64 {
+    std::env::var("TILE_CACHE_MAX_MB").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(2048) * 1024 * 1024
+}
+fn collect_cache_files(dir: &FsPath, out: &mut Vec<(PathBuf, u64, std::time::SystemTime)>, total: &mut u64) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for ent in rd.flatten() {
+        let path = ent.path();
+        let Ok(md) = ent.metadata() else { continue };
+        if md.is_dir() {
+            collect_cache_files(&path, out, total);
+        } else {
+            let sz = md.len();
+            *total += sz;
+            let mt = md.modified().unwrap_or(std::time::UNIX_EPOCH);
+            out.push((path, sz, mt));
+        }
+    }
+}
+fn maybe_prune_tile_cache() {
+    // 每 500 次写检查一次，避免每块瓦片都全盘扫描
+    if TILE_WRITE_COUNT.fetch_add(1, Ordering::Relaxed) % 500 != 0 {
+        return;
+    }
+    tokio::task::spawn_blocking(|| {
+        let cap = tile_cache_cap_bytes();
+        let dir = cache_dir();
+        let mut files: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
+        let mut total: u64 = 0;
+        collect_cache_files(&dir, &mut files, &mut total);
+        if total <= cap {
+            return;
+        }
+        files.sort_by_key(|(_, _, mt)| *mt); // 最旧在前
+        let mut freed: u64 = 0;
+        for (path, sz, _) in files {
+            if total.saturating_sub(freed) <= cap {
+                break;
+            }
+            if fs::remove_file(&path).is_ok() {
+                freed += sz;
+            }
+        }
+        eprintln!("[tilecache] 修剪完成：释放 {} MB，当前约 {} MB", freed / 1_048_576, total.saturating_sub(freed) / 1_048_576);
+    });
 }
 fn photo_dir() -> PathBuf {
     data_dir().join("photos")
@@ -433,22 +482,23 @@ fn cookie_token(headers: &HeaderMap) -> Option<String> {
     }
     None
 }
-// 客户端 IP（服务在 nginx 反代后，取 X-Forwarded-For 第一跳；回退 X-Real-IP）
+// 客户端 IP（限流身份）。
+// 优先 X-Real-IP：nginx 用 `proxy_set_header X-Real-IP $remote_addr` 写入真实对端，客户端无法伪造（nginx 覆盖）。
+// X-Forwarded-For 的“第一跳”是客户端可自填的，绝不能作为主来源（会让限流被绕过或错误全局共享）。
+// XFF 仅作兜底，且取“最后一跳”——即 nginx 追加的真实对端，而非客户端伪造的头部。
 fn client_ip(headers: &HeaderMap) -> String {
-    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = xff.split(',').next() {
-            let ip = first.trim();
-            if !ip.is_empty() {
-                return ip.to_string();
-            }
+    if let Some(ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        let ip = ip.trim();
+        if !ip.is_empty() {
+            return ip.to_string();
         }
     }
-    headers
-        .get("x-real-ip")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_string())
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        if let Some(last) = xff.split(',').filter(|s| !s.trim().is_empty()).last() {
+            return last.trim().to_string();
+        }
+    }
+    "unknown".to_string()
 }
 fn is_owner(st: &AppState, headers: &HeaderMap) -> bool {
     let Some(tok) = cookie_token(headers) else { return false };
@@ -1097,16 +1147,24 @@ async fn places(State(st): State<AppState>, headers: HeaderMap) -> impl IntoResp
             "engagement": engagement, "site": site_config()
         }));
     }
-    let profile = s.profile.clone();
-    drop(s);
-    let seed: Store = serde_json::from_str(SEED).unwrap();
-    let places: Vec<Place> = if owner {
-        seed.places
-    } else {
-        seed.places.iter().map(sanitize_place_for_guest).collect()
-    };
+    // 空库回退到内置样例仅用于演示，且必须显式开启 DEMO_SEED=1。
+    // 否则空库如实返回空数据（保留真实 trips/cities/profile）——避免删到最后一个地点时样例“复活”、真实旅程被样例数据覆盖。
+    if std::env::var("DEMO_SEED").as_deref() == Ok("1") {
+        let profile = s.profile.clone();
+        drop(s);
+        let seed: Store = serde_json::from_str(SEED).unwrap();
+        let places: Vec<Place> = if owner {
+            seed.places
+        } else {
+            seed.places.iter().map(sanitize_place_for_guest).collect()
+        };
+        return Json(json!({
+            "places": places, "cities": seed.cities, "trips": seed.trips, "profile": profile,
+            "engagement": engagement, "site": site_config()
+        }));
+    }
     Json(json!({
-        "places": places, "cities": seed.cities, "trips": seed.trips, "profile": profile,
+        "places": [], "cities": s.cities, "trips": s.trips, "profile": s.profile,
         "engagement": engagement, "site": site_config()
     }))
 }
@@ -1281,10 +1339,25 @@ async fn track_view(State(st): State<AppState>, headers: HeaderMap) -> impl Into
 fn attr_esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
+// 分享路径里的 id 只允许 [A-Za-z0-9_-]（我们生成的 id 本就是这个字符集）。
+// 任何越界字符一律拒绝，从源头掐断把 id 拼进内联 <script> 的注入面。
+fn safe_share_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+// photos/ 下的相对路径是否安全：非空、不以 / 开头（绝对路径）、不含 .. 段、不含反斜杠或盘符
+fn is_safe_rel(rel: &str) -> bool {
+    !rel.is_empty()
+        && !rel.starts_with('/')
+        && !rel.contains('\\')
+        && !rel.split('/').any(|seg| seg == ".." || seg == "." || seg.is_empty())
+}
 async fn share_place_page(
     State(st): State<AppState>,
     Path(id): Path<String>,
 ) -> axum::response::Response {
+    if !safe_share_id(&id) {
+        return render_share_page("旅行足迹", "", None, "#").await;
+    }
     let (title, desc, image) = {
         let s = st.store.lock().await;
         match s.places.iter().find(|p| p.id == id) {
@@ -1304,6 +1377,9 @@ async fn share_trip_page(
     State(st): State<AppState>,
     Path(id): Path<String>,
 ) -> axum::response::Response {
+    if !safe_share_id(&id) {
+        return render_share_page("旅行足迹", "", None, "#").await;
+    }
     let (title, desc, image) = {
         let s = st.store.lock().await;
         match s.trips.iter().find(|t| t.id == id) {
@@ -1339,11 +1415,12 @@ async fn render_share_page(
          <meta property=\"og:description\" content=\"{d}\">\
          <meta property=\"og:image\" content=\"{img}\">\
          <meta name=\"twitter:card\" content=\"summary_large_image\">\
-         <script>try{{if(!location.hash)location.replace(location.pathname.replace(/\\/(p|t)\\/.*$/,'/')+'{h}');}}catch(e){{}}</script>",
+         <script>try{{if(!location.hash)location.replace(location.pathname.replace(/\\/(p|t)\\/.*$/,'/')+{h});}}catch(e){{}}</script>",
         t = attr_esc(title),
         d = attr_esc(desc),
         img = attr_esc(&img_abs),
-        h = hash
+        // hash 以 JSON 字符串字面量注入（自带引号并转义 '"\ 等），JS 上下文安全
+        h = serde_json::to_string(hash).unwrap_or_else(|_| "\"#\"".into())
     );
     let html = html.replacen("</head>", &format!("{og}</head>"), 1);
     (
@@ -1872,7 +1949,9 @@ async fn export_zip(State(st): State<AppState>, headers: HeaderMap) -> axum::res
         let mut refs: std::collections::BTreeSet<String> = Default::default();
         let mut push_url = |u: &str| {
             if let Some(rest) = u.strip_prefix("/photos/") {
-                if !rest.is_empty() && !rest.contains("..") {
+                // 只收相对、干净的路径：拒绝 .. 穿越，拒绝以 / 开头的绝对路径
+                // （strip_prefix 后 "/photos//etc/passwd" → "/etc/passwd"，join 绝对路径会脱离照片目录）
+                if is_safe_rel(rest) {
                     refs.insert(rest.to_string());
                 }
             }
@@ -2264,6 +2343,7 @@ async fn ofm(State(st): State<AppState>, Path(sub): Path<String>) -> impl IntoRe
             let _ = fs::create_dir_all(parent);
         }
         let _ = fs::write(&cache_path, &buf);
+        maybe_prune_tile_cache();
     }
     ok_bytes(buf, content_type_for(&sub))
 }
@@ -2299,6 +2379,7 @@ async fn carto(State(st): State<AppState>, Path(sub): Path<String>) -> impl Into
         let _ = fs::create_dir_all(parent);
     }
     let _ = fs::write(&cache_path, &buf);
+    maybe_prune_tile_cache();
     ok_bytes(buf, "image/png")
 }
 
