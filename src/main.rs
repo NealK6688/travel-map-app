@@ -338,15 +338,24 @@ fn load_store() -> Store {
         Err(_) => Store::default(), // 文件不存在：全新部署，空库正常
     }
 }
-fn save_store(s: &Store) {
-    match serde_json::to_string_pretty(s) {
-        Ok(t) => {
-            if let Err(e) = atomic_write(&store_file(), &t) {
-                eprintln!("[ERROR] save_store 写盘失败：{e}（数据未持久化，重启将丢失本次改动！）");
-            }
-        }
-        Err(e) => eprintln!("[ERROR] save_store 序列化失败：{e}"),
+// 落盘失败必须让调用方知道，不能只打日志然后返回成功（否则界面显示保存成功、重启后数据丢失）。
+#[must_use = "写盘可能失败，必须处理 Result，不能让接口在数据未持久化时返回成功"]
+fn save_store(s: &Store) -> std::io::Result<()> {
+    let t = serde_json::to_string_pretty(s)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    if let Err(e) = atomic_write(&store_file(), &t) {
+        eprintln!("[ERROR] save_store 写盘失败：{e}（数据未持久化！）");
+        return Err(e);
     }
+    Ok(())
+}
+// 写盘失败时的统一 500 响应（handler 返回 axum Response 者用）
+fn save_err(e: std::io::Error) -> axum::response::Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({"error": format!("保存失败，改动未持久化：{e}")})),
+    )
+        .into_response()
 }
 
 // 启动迁移：v1（无 version 字段）→ v2 → v3 → v4，链式、幂等，每步迁移前按当前版本备份
@@ -1190,7 +1199,7 @@ async fn patch_profile(
         store.profile.about = cap(v, 2000); // 关于页长文，2000 字上限
     }
     let resp = store.profile.clone();
-    save_store(&store);
+    if let Err(e) = save_store(&store) { return save_err(e); }
     Json(resp).into_response()
 }
 
@@ -1236,7 +1245,7 @@ async fn like_place(
     let n = store.likes.entry(id.clone()).or_insert(0);
     *n += 1;
     let cnt = *n;
-    save_store(&store);
+    if let Err(e) = save_store(&store) { return save_err(e); }
     Json(json!({"ok": true, "likes": cnt})).into_response()
 }
 
@@ -1300,7 +1309,7 @@ async fn post_message(
     if over > 0 {
         store.messages.drain(0..over); // 最多留 5000 条
     }
-    save_store(&store);
+    if let Err(e) = save_store(&store) { return save_err(e); }
     Json(json!({"ok": true, "message": msg})).into_response()
 }
 
@@ -1317,7 +1326,7 @@ async fn delete_message(
     let before = store.messages.len();
     store.messages.retain(|m| m.id != id);
     if store.messages.len() != before {
-        save_store(&store);
+        if let Err(e) = save_store(&store) { return save_err(e); }
     }
     Json(json!({"ok": true})).into_response()
 }
@@ -1330,7 +1339,7 @@ async fn track_view(State(st): State<AppState>, headers: HeaderMap) -> impl Into
     let mut store = st.store.lock().await;
     store.views += 1;
     if store.views % 5 == 0 {
-        save_store(&store);
+        if let Err(e) = save_store(&store) { eprintln!("[warn] save_store 失败: {e}"); } // 尽力而为:失败仅记日志，不改变流程
     }
     Json(json!({"ok": true}))
 }
@@ -1498,7 +1507,7 @@ async fn create_place(
     };
     let mut store = st.store.lock().await;
     store.places.push(place.clone());
-    save_store(&store);
+    if let Err(e) = save_store(&store) { return save_err(e); }
     Json(place).into_response()
 }
 
@@ -1626,7 +1635,7 @@ async fn patch_place(
         p.guide = v.clone();
     }
     let resp = p.clone();
-    save_store(&store);
+    if let Err(e) = save_store(&store) { return save_err(e); }
     Json(resp).into_response()
 }
 
@@ -1644,7 +1653,7 @@ async fn delete_place(
         return (StatusCode::NOT_FOUND, Json(json!({"error": "place not found"}))).into_response();
     };
     let removed = store.places.remove(pos);
-    save_store(&store);
+    if let Err(e) = save_store(&store) { return save_err(e); }
     drop(store);
     for ph in &removed.photos {
         delete_photo_files(&ph.id);
@@ -1675,7 +1684,7 @@ async fn delete_place_photo(
         }
     }
     let resp = p.clone();
-    save_store(&store);
+    if let Err(e) = save_store(&store) { return save_err(e); }
     drop(store);
     delete_photo_files(&removed.id);
     Json(resp).into_response()
@@ -1748,7 +1757,7 @@ async fn create_trip(
     };
     let mut store = st.store.lock().await;
     store.trips.push(trip.clone());
-    save_store(&store);
+    if let Err(e) = save_store(&store) { return save_err(e); }
     Json(trip).into_response()
 }
 
@@ -1804,7 +1813,7 @@ async fn patch_trip(
         t.guide = v.clone();
     }
     let resp = t.clone();
-    save_store(&store);
+    if let Err(e) = save_store(&store) { return save_err(e); }
     Json(resp).into_response()
 }
 
@@ -1827,7 +1836,7 @@ async fn delete_trip(
             p.trip_id = None;
         }
     }
-    save_store(&store);
+    if let Err(e) = save_store(&store) { return save_err(e); }
     Json(json!({"ok": true})).into_response()
 }
 
@@ -1864,7 +1873,7 @@ async fn assign_unplaced(
         let p = store.places.iter_mut().find(|p| p.id == pid).unwrap();
         p.photos.push(Photo { id: u.id, url: u.url, thumb: u.thumb, date: None });
         let resp = p.clone();
-        save_store(&store);
+        if let Err(e) = save_store(&store) { return save_err(e); }
         return Json(resp).into_response();
     }
     // 分支二：新建 place
@@ -1913,7 +1922,7 @@ async fn assign_unplaced(
     };
     let resp = place.clone();
     store.places.push(place);
-    save_store(&store);
+    if let Err(e) = save_store(&store) { return save_err(e); }
     Json(resp).into_response()
 }
 
@@ -1931,7 +1940,7 @@ async fn delete_unplaced(
         return (StatusCode::NOT_FOUND, Json(json!({"error": "unplaced not found"}))).into_response();
     };
     let removed = store.unplaced.remove(pos);
-    save_store(&store);
+    if let Err(e) = save_store(&store) { return save_err(e); }
     drop(store);
     delete_photo_files(&removed.id);
     Json(json!({"ok": true})).into_response()
@@ -2070,7 +2079,7 @@ async fn import_zip(
         let mut store = st.store.lock().await;
         *store = new_store;
         place_count = store.places.len();
-        save_store(&store);
+        if let Err(e) = save_store(&store) { return save_err(e); }
         // 清理不再被引用的旧照片：否则旧图物理残留在 data/photos，/photos/{id}.jpg 无鉴权仍可 GET，磁盘也只增不减
         gc_orphan_photos(&store);
     }
@@ -2112,7 +2121,9 @@ fn parse_backup_zip(bytes: &[u8]) -> Result<(Store, Vec<(String, Vec<u8>)>), Str
     // zip 炸弹防护上限
     const MAX_ENTRIES: usize = 20_000;
     const MAX_FILE: u64 = 60 * 1024 * 1024; // 单文件 60MB
-    const MAX_TOTAL: u64 = 4 * 1024 * 1024 * 1024; // 解压总量 4GB
+    // 解压总量上限：备份包整体解压进内存，4GB 会 OOM。请求体本就限到 256MB，
+    // 照片是已压缩 jpg（解压≈原体积），512MB 远超任何真实个人备份又稳在内存安全区。IMPORT_MAX_MB 可覆盖。
+    let max_total: u64 = std::env::var("IMPORT_MAX_MB").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(512) * 1024 * 1024;
     const MAX_STORE_JSON: u64 = 64 * 1024 * 1024; // store.json 64MB
     let mut za = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| "不是有效的 zip 备份包".to_string())?;
     if za.len() > MAX_ENTRIES {
@@ -2132,7 +2143,7 @@ fn parse_backup_zip(bytes: &[u8]) -> Result<(Store, Vec<(String, Vec<u8>)>), Str
             return Err("备份包内有超大文件，已拒绝".to_string());
         }
         total = total.saturating_add(declared);
-        if total > MAX_TOTAL {
+        if total > max_total {
             return Err("备份包解压后体积过大，已拒绝".to_string());
         }
         if name == "store.json" {
@@ -2501,7 +2512,7 @@ async fn upload(
                     p.color = color.clone();
                 }
                 let place_clone = p.clone();
-                save_store(&store); // 增量落盘，防中途崩溃丢照片索引
+                if let Err(e) = save_store(&store) { eprintln!("[warn] save_store 失败: {e}"); }  // 增量落盘，尽力而为
                 results.push(json!({"photo": photo, "place": place_clone}));
                 continue;
             }
@@ -2520,7 +2531,7 @@ async fn upload(
                         thumb: photo.thumb.clone(),
                         name: file_name.clone(),
                     });
-                    save_store(&store); // 增量落盘，防中途崩溃丢 unplaced 索引
+                    if let Err(e) = save_store(&store) { eprintln!("[warn] save_store 失败: {e}"); }  // 增量落盘，尽力而为
                 }
                 results.push(json!({"photo": photo, "needLocation": true, "unplacedId": id}));
                 continue;
@@ -2602,7 +2613,7 @@ async fn upload(
                 pid
             };
             // 增量落盘：每张处理完即 save，进程中途崩溃不会丢已入库的照片索引（防孤儿）
-            save_store(&store);
+            if let Err(e) = save_store(&store) { return save_err(e); }
             store.places.iter().find(|p| p.id == pid).cloned()
         };
         results.push(json!({"photo": photo, "place": place_clone}));
@@ -2610,7 +2621,7 @@ async fn upload(
 
     let places_snapshot = {
         let store = st.store.lock().await;
-        save_store(&store);
+        if let Err(e) = save_store(&store) { return save_err(e); }
         store.places.clone()
     };
     Json(json!({"ok": true, "results": results, "places": places_snapshot})).into_response()
@@ -2642,7 +2653,7 @@ fn backfill_colors() {
     }
     if changed > 0 {
         eprintln!("[backfill_colors] 为 {changed} 个地点补充了情绪主色");
-        save_store(&store);
+        if let Err(e) = save_store(&store) { eprintln!("[warn] save_store 失败: {e}"); } // 尽力而为:失败仅记日志，不改变流程
     }
 }
 #[tokio::main]
