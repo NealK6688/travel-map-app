@@ -169,6 +169,11 @@ body.owner .heroentry{display:none !important;}
   .tstep .m .dt{font-size:10.5px;color:var(--faint);font-weight:600;margin-top:2px;}
   .tstep .m .dt .day{color:var(--brand);font-weight:800;}
   .tourtl .lk{flex:none;align-self:center;width:14px;height:2px;background:rgba(255,255,255,.7);margin-bottom:34px;border-radius:2px;}
+  /* tour 模式:地图标记清理成干净照片圆点——藏掉名字标签与分类角标,挂上步骤序号 */
+  body.tourmode .pin .lab{display:none !important;}
+  body.tourmode .pin .catbadge{display:none !important;}
+  body.tourmode .pin .tnum{position:absolute;left:-3px;top:-3px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:var(--coral);color:#fff;font-size:10.5px;font-weight:800;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 5px rgba(0,0,0,.35);z-index:3;}
+  body.tourmode .pin.tplan .tnum{background:#8fa9bd;}
   .nav .list{background:var(--panel);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--card3);border-radius:var(--rBox);box-shadow:var(--shadow);padding:7px;max-height:52vh;overflow:auto;
     -webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 14px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 14px),transparent);}
   .nav .grp{display:flex;align-items:center;gap:7px;padding:8px 9px 4px;font-size:10.5px;font-weight:800;letter-spacing:.8px;color:var(--faint);}
@@ -1668,7 +1673,7 @@ async function refresh(flyToId){
   // tour 首页开着时:数据变了就同步刷新切换条/时间线/路线（若这趟被删则退出）
   if(TOUR){
     if(!tripById(TOUR.trip.id)||!PLACES.some(p=>p.tripId===TOUR.trip.id)){closeTour();}
-    else{renderTourSwitch();renderTourTimeline();tourRouteDraw();tourSelect(Math.min(TOUR.idx,TOUR.stops.length-1),false);}
+    else{tourDecorateMarkers();renderTourSwitch();renderTourTimeline();tourRouteDraw();tourSelect(Math.min(TOUR.idx,TOUR.stops.length-1),false);}
   }
   if(typeof renderCklCard==='function')renderCklCard();
   // 数据变更后同步刷新打开中的搜索结果，避免残留已删地点
@@ -2403,6 +2408,12 @@ function fitAll(animate){
 }
 
 function updateClusters(){
+  // tour 模式:不做聚合,每站都显示为独立照片圆点(Polarsteps 风格),聚合气泡与之冲突
+  if(document.body.classList.contains('tourmode')){
+    clusterMarkers.forEach(m=>m.remove());clusterMarkers.length=0;
+    shownPlaces().forEach(p=>{if(markers[p.id])markers[p.id].getElement().style.display='';});
+    return;
+  }
   const sp=shownPlaces();
   if(!map||!sp.length)return;
   const R=52;
@@ -4291,6 +4302,18 @@ function renderTourTimeline(){
     row.appendChild(card);
   });
 }
+// 给这趟每个站的地图标记挂上步骤序号,并让点标记=选中该站(而非打开详情面板)
+function tourDecorateMarkers(){
+  if(!TOUR||!map)return;
+  TOUR.stops.forEach((p,i)=>{
+    const mk=markers[p.id];if(!mk)return;
+    const el=mk.getElement();
+    el.classList.toggle('tplan',p.status==='planned');
+    if(!el.querySelector('.tnum')){const b=document.createElement('div');b.className='tnum';el.appendChild(b);}
+    el.querySelector('.tnum').textContent=(i+1);
+    el.onclick=(e)=>{e.stopPropagation();tourSelect(i);};
+  });
+}
 function tourSelect(i,fly){
   if(!TOUR)return;
   TOUR.idx=Math.max(0,Math.min(i,TOUR.stops.length-1));
@@ -4314,7 +4337,7 @@ function openTour(tripId){
   document.body.classList.add('tourmode');
   // 只显示这趟的标记
   TRIP_FILTER=trip.id;YEAR_FILTER=null;CAT_FILTER=null;
-  clearMarkers();buildMarkers();updateClusters();
+  clearMarkers();buildMarkers();updateClusters();tourDecorateMarkers();
   tourRouteEnsure();tourRouteDraw();
   renderTourSwitch();renderTourTimeline();
   tourSelect(0,false);
