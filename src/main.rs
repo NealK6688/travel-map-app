@@ -335,7 +335,13 @@ fn load_store() -> Store {
                 Store::default()
             }
         },
-        Err(_) => Store::default(), // 文件不存在：全新部署，空库正常
+        // 只有“文件不存在”才是全新部署、空库正常。
+        // 权限/IO/挂载未就绪等错误绝不能当空库——否则随后任意写操作会用空库覆盖磁盘上真实数据。这类错误直接拒绝启动。
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Store::default(),
+        Err(e) => {
+            eprintln!("[FATAL] 读取 store.json 失败（非文件缺失，可能是权限/磁盘/挂载问题）：{e}；为避免用空库覆盖真实数据，拒绝启动。");
+            std::process::exit(1);
+        }
     }
 }
 // 落盘失败必须让调用方知道，不能只打日志然后返回成功（否则界面显示保存成功、重启后数据丢失）。
@@ -348,6 +354,19 @@ fn save_store(s: &Store) -> std::io::Result<()> {
         return Err(e);
     }
     Ok(())
+}
+// 写盘失败后回滚内存：还原到磁盘上最后一次成功持久化的状态，丢弃这次未落盘的改动。
+// 否则失败的改动会留在内存里——GET 已能看到、重试会产生重复、后续任意一次成功保存又会把它一起落盘。
+// 磁盘也读不出（极端）则保持现状、只记日志，绝不 panic。
+fn rollback_from_disk(store: &mut Store) {
+    match fs::read_to_string(store_file()) {
+        Ok(t) => {
+            if let Ok(s) = serde_json::from_str::<Store>(&t) {
+                *store = s;
+            }
+        }
+        Err(_) => eprintln!("[warn] 回滚读盘失败，内存状态可能仍含未落盘改动"),
+    }
 }
 // 写盘失败时的统一 500 响应（handler 返回 axum Response 者用）
 fn save_err(e: std::io::Error) -> axum::response::Response {
@@ -1199,7 +1218,7 @@ async fn patch_profile(
         store.profile.about = cap(v, 2000); // 关于页长文，2000 字上限
     }
     let resp = store.profile.clone();
-    if let Err(e) = save_store(&store) { return save_err(e); }
+    if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
     Json(resp).into_response()
 }
 
@@ -1245,7 +1264,7 @@ async fn like_place(
     let n = store.likes.entry(id.clone()).or_insert(0);
     *n += 1;
     let cnt = *n;
-    if let Err(e) = save_store(&store) { return save_err(e); }
+    if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
     Json(json!({"ok": true, "likes": cnt})).into_response()
 }
 
@@ -1309,7 +1328,7 @@ async fn post_message(
     if over > 0 {
         store.messages.drain(0..over); // 最多留 5000 条
     }
-    if let Err(e) = save_store(&store) { return save_err(e); }
+    if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
     Json(json!({"ok": true, "message": msg})).into_response()
 }
 
@@ -1326,7 +1345,7 @@ async fn delete_message(
     let before = store.messages.len();
     store.messages.retain(|m| m.id != id);
     if store.messages.len() != before {
-        if let Err(e) = save_store(&store) { return save_err(e); }
+        if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
     }
     Json(json!({"ok": true})).into_response()
 }
@@ -1507,7 +1526,7 @@ async fn create_place(
     };
     let mut store = st.store.lock().await;
     store.places.push(place.clone());
-    if let Err(e) = save_store(&store) { return save_err(e); }
+    if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
     Json(place).into_response()
 }
 
@@ -1635,7 +1654,7 @@ async fn patch_place(
         p.guide = v.clone();
     }
     let resp = p.clone();
-    if let Err(e) = save_store(&store) { return save_err(e); }
+    if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
     Json(resp).into_response()
 }
 
@@ -1653,7 +1672,7 @@ async fn delete_place(
         return (StatusCode::NOT_FOUND, Json(json!({"error": "place not found"}))).into_response();
     };
     let removed = store.places.remove(pos);
-    if let Err(e) = save_store(&store) { return save_err(e); }
+    if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
     drop(store);
     for ph in &removed.photos {
         delete_photo_files(&ph.id);
@@ -1684,7 +1703,7 @@ async fn delete_place_photo(
         }
     }
     let resp = p.clone();
-    if let Err(e) = save_store(&store) { return save_err(e); }
+    if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
     drop(store);
     delete_photo_files(&removed.id);
     Json(resp).into_response()
@@ -1757,7 +1776,7 @@ async fn create_trip(
     };
     let mut store = st.store.lock().await;
     store.trips.push(trip.clone());
-    if let Err(e) = save_store(&store) { return save_err(e); }
+    if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
     Json(trip).into_response()
 }
 
@@ -1813,7 +1832,7 @@ async fn patch_trip(
         t.guide = v.clone();
     }
     let resp = t.clone();
-    if let Err(e) = save_store(&store) { return save_err(e); }
+    if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
     Json(resp).into_response()
 }
 
@@ -1836,7 +1855,7 @@ async fn delete_trip(
             p.trip_id = None;
         }
     }
-    if let Err(e) = save_store(&store) { return save_err(e); }
+    if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
     Json(json!({"ok": true})).into_response()
 }
 
@@ -1873,7 +1892,7 @@ async fn assign_unplaced(
         let p = store.places.iter_mut().find(|p| p.id == pid).unwrap();
         p.photos.push(Photo { id: u.id, url: u.url, thumb: u.thumb, date: None });
         let resp = p.clone();
-        if let Err(e) = save_store(&store) { return save_err(e); }
+        if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
         return Json(resp).into_response();
     }
     // 分支二：新建 place
@@ -1922,7 +1941,7 @@ async fn assign_unplaced(
     };
     let resp = place.clone();
     store.places.push(place);
-    if let Err(e) = save_store(&store) { return save_err(e); }
+    if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
     Json(resp).into_response()
 }
 
@@ -1940,7 +1959,7 @@ async fn delete_unplaced(
         return (StatusCode::NOT_FOUND, Json(json!({"error": "unplaced not found"}))).into_response();
     };
     let removed = store.unplaced.remove(pos);
-    if let Err(e) = save_store(&store) { return save_err(e); }
+    if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
     drop(store);
     delete_photo_files(&removed.id);
     Json(json!({"ok": true})).into_response()
@@ -2062,24 +2081,38 @@ async fn import_zip(
         }
     };
     let photo_count = photos.iter().filter(|(rel, _)| !rel.starts_with("thumb/")).count();
-    let _ = fs::copy(
+    // 原子性：先把旧库落备份、把所有照片写盘并逐一校验——任一步失败就中止，
+    // 绝不在照片没写全的情况下替换 store 或清理旧照片（否则会出现“新照片没写进去、旧照片被删、接口却返回成功”的数据丢失）。
+    if let Err(e) = fs::copy(
         store_file(),
         data_dir().join(format!("store.pre-import.{}.bak.json", now_secs())),
-    );
-    fs::create_dir_all(thumb_dir()).ok();
+    ) {
+        // 首次导入时旧库可能不存在（NotFound 可忽略）；其他错误（磁盘/权限）视为不安全，中止
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("备份旧数据失败，导入已中止（原数据未改动）：{e}")}))).into_response();
+        }
+    }
+    if let Err(e) = fs::create_dir_all(thumb_dir()) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("创建照片目录失败，导入已中止：{e}")}))).into_response();
+    }
     for (rel, data) in &photos {
         let path = photo_dir().join(rel);
         if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
+            if let Err(e) = fs::create_dir_all(parent) {
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("创建照片子目录失败，导入已中止（原数据未改动）：{e}")}))).into_response();
+            }
         }
-        let _ = fs::write(&path, data);
+        if let Err(e) = fs::write(&path, data) {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("照片写盘失败，导入已中止（原数据未改动）：{e}")}))).into_response();
+        }
     }
+    // 照片全部落盘成功，才替换 store 并清理孤儿照片
     let place_count;
     {
         let mut store = st.store.lock().await;
         *store = new_store;
         place_count = store.places.len();
-        if let Err(e) = save_store(&store) { return save_err(e); }
+        if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
         // 清理不再被引用的旧照片：否则旧图物理残留在 data/photos，/photos/{id}.jpg 无鉴权仍可 GET，磁盘也只增不减
         gc_orphan_photos(&store);
     }
@@ -2613,7 +2646,7 @@ async fn upload(
                 pid
             };
             // 增量落盘：每张处理完即 save，进程中途崩溃不会丢已入库的照片索引（防孤儿）
-            if let Err(e) = save_store(&store) { return save_err(e); }
+            if let Err(e) = save_store(&store) { rollback_from_disk(&mut store); return save_err(e); }
             store.places.iter().find(|p| p.id == pid).cloned()
         };
         results.push(json!({"photo": photo, "place": place_clone}));
@@ -2621,6 +2654,7 @@ async fn upload(
 
     let places_snapshot = {
         let store = st.store.lock().await;
+        // 此处无本地改动，只是收尾再落一次盘；失败直接 500，无需回滚
         if let Err(e) = save_store(&store) { return save_err(e); }
         store.places.clone()
     };
@@ -2691,12 +2725,12 @@ async fn main() {
         .route("/api/trips", post(create_trip))
         .route("/api/trips/:id", patch(patch_trip).delete(delete_trip))
         .route("/api/geocode", get(geocode))
-        .route("/api/upload", post(upload))
+        .route("/api/upload", post(upload).layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024)))
         .route("/api/unplaced", get(list_unplaced))
         .route("/api/unplaced/:id", delete(delete_unplaced))
         .route("/api/unplaced/:id/assign", post(assign_unplaced))
         .route("/api/export", get(export_zip))
-        .route("/api/import", post(import_zip))
+        .route("/api/import", post(import_zip).layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024)))
         .route("/api/places/:id/like", post(like_place))
         .route("/api/messages", get(list_messages).post(post_message))
         .route("/api/messages/:id", delete(delete_message))
@@ -2709,12 +2743,16 @@ async fn main() {
         .nest_service("/photos", ServeDir::new("data/photos"))
         .fallback_service(ServeDir::new("public"))
         .layer(tower_http::compression::CompressionLayer::new())
-        // 手机原图 5-15MB、批量上传可达百MB；axum 默认 2MB 会把超限字段静默吞掉（表现为"上传没反应"）
-        .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024))
+        // 全局请求体上限 64KB：/api/login、/api/messages 等匿名接口只吃小 JSON，
+        // 全局放到 256MB 会让匿名者并发提交超大请求耗尽内存（DoS）。大文件接口（upload/import）在各自 route 上单独放宽到 256MB。
+        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
         .with_state(state);
 
+    // 默认只绑 127.0.0.1：本服务设计为跑在 nginx 反代之后（nginx 写不可伪造的 X-Real-IP）。
+    // 绑 0.0.0.0 会让端口可被公网直连，从而绕过 nginx、伪造转发头骗过限流。需要直接对外时显式设 BIND_ADDR=0.0.0.0。
+    let bind_host = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".into());
     let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8080);
-    let addr = format!("0.0.0.0:{port}");
+    let addr = format!("{bind_host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     println!("travel-map-app on http://{addr}  (style: {})", ofm_style());
     axum::serve(listener, app).await.unwrap();
